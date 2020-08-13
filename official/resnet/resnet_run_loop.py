@@ -31,6 +31,7 @@ import os
 # pylint: disable=g-bad-import-order
 from absl import flags
 import tensorflow as tf
+import horovod.tensorflow as hvd
 from tensorflow.contrib.data.python.ops import threadpool
 
 from official.resnet import resnet_model
@@ -519,6 +520,8 @@ def resnet_main(
       flags_obj.hooks,
       model_dir=flags_obj.model_dir,
       batch_size=flags_obj.batch_size)
+  hvd.init()
+  train_hooks.append(hvd.TimelineHook())
 
   def input_fn_train(num_epochs):
     return input_function(
