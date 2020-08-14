@@ -47,7 +47,8 @@ def define_performance(num_parallel_calls=True, inter_op=True, intra_op=True,
                        synthetic_data=True, max_train_steps=True, dtype=True,
                        all_reduce_alg=True, tf_gpu_thread_mode=False,
                        datasets_num_private_threads=False,
-                       datasets_num_parallel_batches=False):
+                       datasets_num_parallel_batches=False,
+                       amp=True):
   """Register flags for specifying performance tuning arguments.
 
   Args:
@@ -63,6 +64,7 @@ def define_performance(num_parallel_calls=True, inter_op=True, intra_op=True,
     datasets_num_private_threads: Number of private threads for datasets.
     datasets_num_parallel_batches: Determines how many batches to process in
     parallel when using map and batch from tf.data.
+    amp: Create a flat to allow AMP
 
   Returns:
     A list of flags for core.py to marks as key flags.
@@ -99,6 +101,12 @@ def define_performance(num_parallel_calls=True, inter_op=True, intra_op=True,
             "If set, use fake data (zeroes) instead of a real dataset. "
             "This mode is useful for performance debugging, as it removes "
             "input processing steps, but will not learn anything."))
+
+  if amp:
+    flags.DEFINE_bool(
+        name="amp", default=False,
+        help=help_wrap(
+            "If set, use AMP. "))
 
   if max_train_steps:
     flags.DEFINE_integer(

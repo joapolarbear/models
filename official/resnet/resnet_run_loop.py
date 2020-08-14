@@ -273,7 +273,7 @@ def resnet_model_fn(features, labels, mode, model_class,
                     resnet_size, weight_decay, learning_rate_fn, momentum,
                     data_format, resnet_version, loss_scale,
                     loss_filter_fn=None, dtype=resnet_model.DEFAULT_DTYPE,
-                    fine_tune=False):
+                    fine_tune=False, amp=False):
   """Shared functionality for different resnet model_fns.
 
   Initializes the ResnetModel representing the model layers
@@ -307,6 +307,7 @@ def resnet_model_fn(features, labels, mode, model_class,
       from the loss.
     dtype: the TensorFlow dtype to use for calculations.
     fine_tune: If True only train the dense layers(final layers).
+    fine_tune: If True, use auto mixed precision traiing.
 
   Returns:
     EstimatorSpec parameterized according to the input params and the
@@ -377,6 +378,10 @@ def resnet_model_fn(features, labels, mode, model_class,
         learning_rate=learning_rate,
         momentum=momentum
     )
+
+    if amp:
+      optimizer = tf.train.experimental.enable_mixed_precision_graph_rewrite(optimizer)
+    optimizer = hvd.DistributedOptimizer(optimizer)
 
     def _dense_grad_filter(gvs):
       """Only apply gradient updates to the final layer.
@@ -458,6 +463,8 @@ def resnet_main(
     Dict of results of the run.
   """
 
+  hvd.init()
+
   model_helpers.apply_clean(flags.FLAGS)
 
   # Ensures flag override logic is only executed if explicitly triggered.
@@ -498,7 +505,8 @@ def resnet_main(
           'resnet_version': int(flags_obj.resnet_version),
           'loss_scale': flags_core.get_loss_scale(flags_obj),
           'dtype': flags_core.get_tf_dtype(flags_obj),
-          'fine_tune': flags_obj.fine_tune
+          'fine_tune': flags_obj.fine_tune,
+          'amp': flags_obj.amp
       })
 
   run_params = {
@@ -520,7 +528,6 @@ def resnet_main(
       flags_obj.hooks,
       model_dir=flags_obj.model_dir,
       batch_size=flags_obj.batch_size)
-  hvd.init()
   train_hooks.append(hvd.TimelineHook())
 
   def input_fn_train(num_epochs):
