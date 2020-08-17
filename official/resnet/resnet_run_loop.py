@@ -498,7 +498,7 @@ def resnet_main(
     warm_start_settings = None
 
   classifier = tf.estimator.Estimator(
-      model_fn=model_function, model_dir=flags_obj.model_dir, config=run_config,
+      model_fn=model_function, model_dir=None, config=run_config,
       warm_start_from=warm_start_settings, params={
           'resnet_size': int(flags_obj.resnet_size),
           'data_format': flags_obj.data_format,
