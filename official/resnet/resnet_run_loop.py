@@ -575,6 +575,7 @@ def resnet_main(
 
     tf.logging.info('Starting to evaluate.')
 
+    '''
     # flags_obj.max_train_steps is generally associated with testing and
     # profiling. As a result it is frequently called with synthetic data, which
     # will iterate forever. Passing steps=flags_obj.max_train_steps allows the
@@ -589,7 +590,7 @@ def resnet_main(
     if model_helpers.past_stop_threshold(
         flags_obj.stop_threshold, eval_results['accuracy']):
       break
-
+    '''
   if flags_obj.export_dir is not None:
     # Exports a saved model for the given classifier.
     export_dtype = flags_core.get_tf_dtype(flags_obj)
@@ -601,6 +602,8 @@ def resnet_main(
           shape, batch_size=flags_obj.batch_size, dtype=export_dtype)
     classifier.export_savedmodel(flags_obj.export_dir, input_receiver_fn,
                                  strip_default_attrs=True)
+
+  eval_results = None
   return eval_results
 
 def define_resnet_flags(resnet_size_choices=None):
