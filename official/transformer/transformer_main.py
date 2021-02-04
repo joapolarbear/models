@@ -24,12 +24,19 @@ from __future__ import print_function
 
 import os
 import tempfile
+import time
+import timeit
+import numpy as np
 
 # pylint: disable=g-bad-import-order
 from six.moves import xrange  # pylint: disable=redefined-builtin
 from absl import app as absl_app
 from absl import flags
 import tensorflow as tf
+try:
+  import byteps.tensorflow as bps
+except:
+  import horovod.tensorflow as bps
 # pylint: enable=g-bad-import-order
 
 from official.transformer import compute_bleu
@@ -64,6 +71,17 @@ BLEU_DIR = "bleu"
 TENSORS_TO_LOG = {
     "learning_rate": "model/get_train_op/learning_rate/learning_rate",
     "cross_entropy_loss": "model/cross_entropy"}
+
+def train_input_generator(features):
+  while True:
+    feed_dict = {}
+    for input_name, tensor in features.items():
+      if "\'" in str(tensor.dtype):
+        dtype_as_str = str(tensor.dtype).split("\'")[1]
+      else:
+        dtype_as_str = str(tensor.dtype)
+      feed_dict[tensor] = np.ones(shape=tensor.shape).astype(dtype_as_str)
+    yield feed_dict
 
 
 def model_fn(features, labels, mode, params):
@@ -135,8 +153,8 @@ def model_fn(features, labels, mode, params):
                 prefix="training/")
         )
       record_scalars(metric_dict)
-      return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
-
+      # return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
+      return train_op
 
 def record_scalars(metric_dict):
   for key, value in metric_dict.items():
@@ -181,6 +199,8 @@ def get_train_op_and_metrics(loss, params):
 
     if params["use_tpu"] and params["tpu"] != tpu_util.LOCAL:
       optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
+    
+    optimizer = bps.DistributedOptimizer(optimizer)
 
     # Calculate and apply gradients using LazyAdamOptimizer.
     global_step = tf.train.get_global_step()
@@ -589,6 +609,7 @@ def run_transformer(flags_obj):
       batch_size=schedule_manager.batch_size,  # for ExamplesPerSecondHook
       use_tpu=params["use_tpu"]  # Not all hooks can run with TPUs
   )
+
   benchmark_logger = logger.get_benchmark_logger()
   benchmark_logger.log_run_info(
       model_name="transformer",
@@ -596,6 +617,49 @@ def run_transformer(flags_obj):
       run_params=params,
       test_id=flags_obj.benchmark_test_id)
 
+  
+  ### inputs: int tensor with shape [batch_size, input_length].
+  # * targets: None or int tensor with shape [batch_size, target_length].
+  features = tf.placeholder(shape=[params["batch_size"], params["max_length"]], dtype=tf.int32)
+  labels = tf.placeholder(shape=[params["batch_size"], 1], dtype=tf.int32)
+  train_op = model_fn(features, labels, tf.estimator.ModeKeys.TRAIN, params)
+  hooks = [
+        # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states
+        # from rank 0 to all other processes. This is necessary to ensure consistent
+        # initialization of all workers when training is started with random weights
+        # or restored from a checkpoint.
+        bps.BroadcastGlobalVariablesHook(0),
+
+        # Horovod: adjust number of steps based on number of GPUs.
+        # tf.train.StopAtStepHook(last_step=100)
+  ]
+  try:
+    hooks.append(bps.TimelineHook(batch_size=params["batch_size"]))
+  except:
+    pass
+
+  config = tf.ConfigProto()
+  config.gpu_options.allow_growth = True
+  config.gpu_options.visible_device_list = str(bps.local_rank())
+
+  training_batch_generator = train_input_generator({"features": features, "labels": labels})
+  # training_batch_generator = dataset.train_input_fn(params)
+  num_batches_per_iter = 10
+  num_iteration = 12
+  with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
+    # mon_sess = TimelineSession(mon_sess, infer_shape_ops)
+    def benchmark_step():
+        feed_dict = next(training_batch_generator)
+        mon_sess.run([train_op], feed_dict=feed_dict)
+    for x in range(num_iteration):
+      # Run a training step synchronously.
+      time_s = time.time()
+      dur = timeit.timeit(benchmark_step, number=num_batches_per_iter)
+      iter_time = (time.time() - time_s) / num_batches_per_iter
+      if bps.rank() == 0:
+        print('Iter #%d: iteration time %f ms' % (x, iter_time * 1000))
+
+  '''
   # Train and evaluate transformer model
   estimator = construct_estimator(flags_obj, params, schedule_manager)
   run_loop(
@@ -623,9 +687,11 @@ def run_transformer(flags_obj):
         flags_obj.export_dir, serving_input_fn,
         assets_extra={"vocab.txt": flags_obj.vocab_file},
         strip_default_attrs=True)
+  '''
 
 
 def main(_):
+  bps.init()
   with logger.benchmark_context(flags.FLAGS):
     run_transformer(flags.FLAGS)
 
